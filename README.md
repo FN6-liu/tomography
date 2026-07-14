@@ -154,21 +154,6 @@ You can modify the beam parameters, the number of projections, and the reconstru
 
 ---
 
-## Results
-
-An example output for a Gaussian beam with 18 projections (10° step) is shown below:
-
-| Original | FBP Reconstruction | ART Reconstruction |
-|----------|---------------------|---------------------|
-| ![Original](docs/original.png) | ![FBP](docs/fbp.png) | ![ART](docs/art.png) |
-
-- **FBP** produces a smooth reconstruction with typical streaking artefacts when angles are limited.
-- **ART** often preserves edges and details better, especially with few projections, but may be slower.
-
-The emittance (computed from the covariance matrix of the reconstructed distribution) typically agrees within a few percent of the true value when using ≥18 angles.
-
----
-
 ## Extensions to 4D
 
 The same principles can be extended to **two transverse degrees of freedom** (x, y, x', y'), i.e., 4D phase space. This requires:
