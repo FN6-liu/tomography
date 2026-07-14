@@ -247,11 +247,11 @@ def compute_beam_parameters(density, x_grid, xp_grid):
     dict
         Dictionary with emittance, alpha, beta, gamma
     """
-    from optics import cov_to_twiss, compute_emittance
+    from optics import cov_to_twiss
     
     # Create temporary distribution
     from beam import BeamDistribution2D
-    temp = BeamDistribution2D(density, x_grid, xp_grid)
+    temp = BeamDistribution2D(np.array(density, copy=True), x_grid, xp_grid)
     
     # Get moments
     cov = temp.get_moments()
@@ -292,10 +292,14 @@ def compute_reconstruction_metrics(original, reconstructed):
     rmse = np.sqrt(np.mean((orig_flat - recon_flat)**2))
     
     # NRMSE (normalized by range)
-    nrmse = rmse / (np.max(orig_flat) - np.min(orig_flat))
-    
+    value_range = np.max(orig_flat) - np.min(orig_flat)
+    nrmse = rmse / value_range if value_range > 0 else 0.0
+
     # Correlation coefficient
-    corr = np.corrcoef(orig_flat, recon_flat)[0, 1]
+    if np.std(orig_flat) > 0 and np.std(recon_flat) > 0:
+        corr = np.corrcoef(orig_flat, recon_flat)[0, 1]
+    else:
+        corr = 1.0 if np.allclose(orig_flat, recon_flat) else 0.0
     
     # Relative error in total intensity
     total_error = abs(np.sum(recon_flat) - np.sum(orig_flat)) / np.sum(orig_flat)

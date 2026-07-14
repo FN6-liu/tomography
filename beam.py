@@ -23,14 +23,17 @@ class BeamDistribution2D:
         xp_grid : np.ndarray
             1D array of x' coordinates [rad]
         """
-        self.density = density
-        self.x_grid = x_grid
-        self.xp_grid = xp_grid
-        self.dx = x_grid[1] - x_grid[0]
-        self.dxp = xp_grid[1] - xp_grid[0]
-        
-        # Normalize density
-        self.density /= np.sum(self.density)
+        self.density = np.array(density, dtype=float, copy=True)
+        self.x_grid = np.array(x_grid, dtype=float, copy=True)
+        self.xp_grid = np.array(xp_grid, dtype=float, copy=True)
+        self.dx = self.x_grid[1] - self.x_grid[0]
+        self.dxp = self.xp_grid[1] - self.xp_grid[0]
+
+        # Normalize density as a continuous PDF on the phase-space grid.
+        total = np.sum(self.density) * self.dx * self.dxp
+        if total <= 0:
+            raise ValueError("Density must have positive total integral.")
+        self.density /= total
     
     @classmethod
     def gaussian(cls, mean, cov, x_grid, xp_grid):
@@ -127,21 +130,23 @@ class BeamDistribution2D:
         BeamDistribution2D
             New rotated distribution
         """
-        # Rotate the grid
-        X_rot = self.x_grid * np.cos(theta) - self.xp_grid * np.sin(theta)
-        Xp_rot = self.x_grid * np.sin(theta) + self.xp_grid * np.cos(theta)
-        
-        # Interpolate density onto rotated grid
+        ct = np.cos(theta)
+        st = np.sin(theta)
+
+        # rho_rot(x, x') = rho(R^-1 [x, x'])
+        X_grid, Xp_grid = np.meshgrid(self.x_grid, self.xp_grid, indexing='ij')
+        X_src = ct * X_grid + st * Xp_grid
+        Xp_src = -st * X_grid + ct * Xp_grid
+
         interp = RegularGridInterpolator(
             (self.x_grid, self.xp_grid), self.density,
             bounds_error=False, fill_value=0.0
         )
-        
-        X_grid, Xp_grid = np.meshgrid(X_rot, Xp_rot, indexing='ij')
-        points = np.stack([X_grid.ravel(), Xp_grid.ravel()], axis=-1)
+
+        points = np.stack([X_src.ravel(), Xp_src.ravel()], axis=-1)
         density_rot = interp(points).reshape(X_grid.shape)
-        
-        return BeamDistribution2D(density_rot, X_rot, Xp_rot)
+
+        return BeamDistribution2D(density_rot, self.x_grid, self.xp_grid)
     
     def project(self, theta=0.0):
         """
@@ -174,19 +179,96 @@ class BeamDistribution2D:
         np.ndarray
             2x2 covariance matrix
         """
-        total = np.sum(self.density)
+        total = np.sum(self.density) * self.dx * self.dxp
         
         x_mesh, xp_mesh = np.meshgrid(self.x_grid, self.xp_grid, indexing='ij')
-        mean_x = np.sum(x_mesh * self.density) / total
-        mean_xp = np.sum(xp_mesh * self.density) / total
+        mean_x = np.sum(x_mesh * self.density) * self.dx * self.dxp / total
+        mean_xp = np.sum(xp_mesh * self.density) * self.dx * self.dxp / total
         
-        x2 = np.sum((x_mesh - mean_x)**2 * self.density) / total
-        xp2 = np.sum((xp_mesh - mean_xp)**2 * self.density) / total
-        xxp = np.sum((x_mesh - mean_x) * (xp_mesh - mean_xp) * self.density) / total
+        x2 = np.sum((x_mesh - mean_x)**2 * self.density) * self.dx * self.dxp / total
+        xp2 = np.sum((xp_mesh - mean_xp)**2 * self.density) * self.dx * self.dxp / total
+        xxp = np.sum((x_mesh - mean_x) * (xp_mesh - mean_xp) * self.density) * self.dx * self.dxp / total
         
         return np.array([[x2, xxp], [xxp, xp2]])
     
-    def normalized_to_physical(self, alpha, beta):
+    def transform(self, matrix, output_x_grid=None, output_xp_grid=None):
+        """
+        Apply a linear coordinate transform y = M x and resample onto
+        a regular output grid.
+
+        Parameters
+        ----------
+        matrix : np.ndarray
+            2x2 transform matrix from source to target coordinates
+        output_x_grid : np.ndarray, optional
+            Target x grid
+        output_xp_grid : np.ndarray, optional
+            Target x' grid
+
+        Returns
+        -------
+        BeamDistribution2D
+        """
+        matrix = np.asarray(matrix, dtype=float)
+        matrix_inv = np.linalg.inv(matrix)
+
+        if output_x_grid is None or output_xp_grid is None:
+            corners = np.array([
+                [self.x_grid[0], self.xp_grid[0]],
+                [self.x_grid[0], self.xp_grid[-1]],
+                [self.x_grid[-1], self.xp_grid[0]],
+                [self.x_grid[-1], self.xp_grid[-1]],
+            ])
+            transformed = corners @ matrix.T
+            if output_x_grid is None:
+                output_x_grid = np.linspace(
+                    transformed[:, 0].min(), transformed[:, 0].max(), len(self.x_grid)
+                )
+            if output_xp_grid is None:
+                output_xp_grid = np.linspace(
+                    transformed[:, 1].min(), transformed[:, 1].max(), len(self.xp_grid)
+                )
+
+        output_x_grid = np.array(output_x_grid, dtype=float, copy=True)
+        output_xp_grid = np.array(output_xp_grid, dtype=float, copy=True)
+
+        interp = RegularGridInterpolator(
+            (self.x_grid, self.xp_grid), self.density,
+            bounds_error=False, fill_value=0.0
+        )
+
+        X_out, Xp_out = np.meshgrid(output_x_grid, output_xp_grid, indexing='ij')
+        target_points = np.stack([X_out.ravel(), Xp_out.ravel()], axis=-1)
+        source_points = target_points @ matrix_inv.T
+        density_out = interp(source_points).reshape(X_out.shape)
+
+        return BeamDistribution2D(density_out, output_x_grid, output_xp_grid)
+
+    def physical_to_normalized(self, alpha, beta, x_grid=None, xp_grid=None):
+        """
+        Transform from physical phase space to normalized phase space.
+
+        Parameters
+        ----------
+        alpha : float
+            Twiss alpha parameter
+        beta : float
+            Twiss beta parameter [m]
+        x_grid : np.ndarray, optional
+            Target normalized x grid
+        xp_grid : np.ndarray, optional
+            Target normalized x' grid
+
+        Returns
+        -------
+        BeamDistribution2D
+        """
+        from optics import normalization_matrix
+
+        T = normalization_matrix(alpha, beta)
+        return self.transform(T, x_grid, xp_grid)
+
+    def normalized_to_physical(self, alpha, beta, x_grid=None, xp_grid=None):
         """
         Transform from normalized phase space to physical phase space.
         
@@ -196,6 +278,10 @@ class BeamDistribution2D:
             Twiss alpha parameter
         beta : float
             Twiss beta parameter [m]
+        x_grid : np.ndarray, optional
+            Target physical x grid
+        xp_grid : np.ndarray, optional
+            Target physical x' grid
         
         Returns
         -------
@@ -204,17 +290,4 @@ class BeamDistribution2D:
         from optics import inverse_normalization_matrix
         
         T = inverse_normalization_matrix(alpha, beta)
-        
-        X_phys = T[0, 0] * self.x_grid + T[0, 1] * self.xp_grid
-        Xp_phys = T[1, 0] * self.x_grid + T[1, 1] * self.xp_grid
-        
-        interp = RegularGridInterpolator(
-            (self.x_grid, self.xp_grid), self.density,
-            bounds_error=False, fill_value=0.0
-        )
-        
-        X_grid, Xp_grid = np.meshgrid(X_phys, Xp_phys, indexing='ij')
-        points = np.stack([X_grid.ravel(), Xp_grid.ravel()], axis=-1)
-        density_phys = interp(points).reshape(X_grid.shape)
-        
-        return BeamDistribution2D(density_phys, X_phys, Xp_phys)
+        return self.transform(T, x_grid, xp_grid)

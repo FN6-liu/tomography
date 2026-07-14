@@ -6,13 +6,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from optics import (
-    compute_emittance, cov_to_twiss, 
-    normalization_matrix, inverse_normalization_matrix
+    normalization_matrix
 )
 from beam import BeamDistribution2D
 from tomography import fbp, art, art_fast
 from utils import (
-    plot_phase_space, plot_sinogram, plot_comparison,
+    plot_sinogram, plot_comparison,
     compute_beam_parameters, print_beam_parameters,
     compute_reconstruction_metrics, plot_residuals
 )
@@ -71,11 +70,20 @@ def main():
     
     # Transform to normalized phase space (where rotation is pure)
     T_norm = normalization_matrix(alpha0, beta0)
-    
-    # For normalized space, we create a new grid in normalized coordinates
-    # The distribution in normalized space is just a rotated version
-    # For a matched beam, it should be circular
-    beam_norm = beam_phys.rotate(0)  # Same distribution, but in normalized coords
+    x_norm_range = max(abs(T_norm[0, 0] * x_grid[0]), abs(T_norm[0, 0] * x_grid[-1]))
+    xp_norm_corners = [
+        T_norm[1, 0] * x_grid[0] + T_norm[1, 1] * xp_grid[0],
+        T_norm[1, 0] * x_grid[0] + T_norm[1, 1] * xp_grid[-1],
+        T_norm[1, 0] * x_grid[-1] + T_norm[1, 1] * xp_grid[0],
+        T_norm[1, 0] * x_grid[-1] + T_norm[1, 1] * xp_grid[-1],
+    ]
+    xp_norm_range = max(abs(val) for val in xp_norm_corners)
+    x_norm_grid = np.linspace(-x_norm_range, x_norm_range, nx)
+    xp_norm_grid = np.linspace(-xp_norm_range, xp_norm_range, nxp)
+
+    beam_norm = beam_phys.physical_to_normalized(
+        alpha0, beta0, x_norm_grid, xp_norm_grid
+    )
     
     # ============================================================
     # 3. Generate Projections (Sinogram)
